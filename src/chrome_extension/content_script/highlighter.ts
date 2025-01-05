@@ -25,6 +25,11 @@ let isNewSelection = false;
 let lastSelectionString: string;
 let latestRunNumber = 0;
 
+// 记录已高亮的文本和颜色
+let highlightsMap: Map<string, string> = new Map();
+const colorPalette = ['#FFEB3B', '#FF4081', '#4CAF50', '#2196F3', '#9C27B0', '#FFC107']; // 高亮颜色池
+let colorIndex = 0;
+
 (async function () {
   await initOptions();
   await addStyleElement();
@@ -34,14 +39,13 @@ let latestRunNumber = 0;
   document.addEventListener("selectionchange", onSelectionChange);
 })();
 
-/** @ts-ignore this is a new API */
 const highlights = new Highlight();
-/** @ts-ignore this is a new API */
 CSS.highlights.set(highlightName(), highlights);
 
 function onSelectStart() {
   isNewSelection = true;
 }
+
 function onSelectionChange() {
   const selectionString = window.getSelection() + "";
   if (!isNewSelection && selectionString === lastSelectionString) return;
@@ -72,7 +76,6 @@ function highlight(runNumber: number) {
   const trailingSpaces = trimmedSelection[3];
   if (!isSelectionValid(selectionString, selection)) return;
 
-  // https://stackoverflow.com/questions/3561493/is-there-a-regexp-escape-function-in-javascript
   const regex = occurrenceRegex(
     selectionString.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&")
   );
@@ -98,6 +101,16 @@ function highlight(runNumber: number) {
     if (!isAncestorNodeValid(textNode.parentNode)) return;
 
     const matchIndex = match.index;
+    const selectedText = match[0];
+
+    let highlightColor = highlightsMap.get(selectedText);
+
+    if (!highlightColor) {
+      highlightColor = colorPalette[colorIndex % colorPalette.length];
+      highlightsMap.set(selectedText, highlightColor);
+      colorIndex++; // 为下一个文本选择分配新的颜色
+    }
+
     if (
       !isUsersSelection(
         selection,
@@ -111,8 +124,8 @@ function highlight(runNumber: number) {
       const range = new Range();
       range.selectNode(textNode);
       range.setStart(textNode, matchIndex);
-      range.setEnd(textNode, matchIndex + selectionString.length);
-      highlights.add(range);
+      range.setEnd(textNode, matchIndex + selectedText.length);
+      highlights.add(range, highlightColor); // 使用不同的颜色
     }
   }
 }
@@ -214,7 +227,6 @@ function drawScrollMarkers(runNumber: number) {
       const clientRect = range.getBoundingClientRect();
       if (!clientRect.width || !clientRect.height) return;
 
-      // window height times percent of element position in document
       const top =
         (window.innerHeight *
           (document.documentElement.scrollTop +
