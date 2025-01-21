@@ -19,6 +19,12 @@ import {
   addScrollMarkersCanvas,
 } from "./utils";
 
+declare global {
+  interface Highlight {
+    ranges(): IterableIterator<Range>;
+  }
+}
+
 let pressedKeys: string[] = [];
 let scrollMarkersCanvasContext: CanvasRenderingContext2D;
 let isNewSelection = false;
@@ -29,18 +35,62 @@ let latestRunNumber = 0;
 let highlightsMap: Map<string, string> = new Map();
 const colorPalette = ['#FFEB3B', '#FF4081', '#4CAF50', '#2196F3', '#9C27B0', '#FFC107']; // 高亮颜色池
 let colorIndex = 0;
+let usedColors: Set<string> = new Set(); // 跟踪已使用的颜色
+
+let highlightInstances: Map<string, { highlight: Highlight; index: number }> = new Map();
+let highlightCounter = 0;
+let updateStyles: () => void;
+
+let isSelecting = false;
+
+function addHighlightStyles() {
+  const styleSheet = document.createElement('style');
+  document.head.appendChild(styleSheet);
+
+  // 监听highlightsMap的变化，更新样式
+  updateStyles = () => {
+    let styles = '';
+    highlightsMap.forEach((color, text) => {
+      const highlightData = highlightInstances.get(text);
+      if (highlightData) {
+        styles += `
+          ::highlight(${highlightName()}_${highlightData.index}) {
+            background-color: ${color};
+          }
+        `;
+      }
+    });
+    styleSheet.textContent = styles;
+  };
+
+  // 初始调用一次
+  updateStyles();
+}
 
 (async function () {
   await initOptions();
   await addStyleElement();
+  const updateStyles = addHighlightStyles();
   scrollMarkersCanvasContext = await addScrollMarkersCanvas();
   pressedKeys = addPressedKeysListeners();
+  
+  // 监听鼠标按下事件，开始选择
+  document.addEventListener("mousedown", () => {
+    isSelecting = true;
+  });
+  
+  // 监听鼠标松开事件，结束选择并处理高亮
+  document.addEventListener("mouseup", () => {
+    if (isSelecting) {
+      isSelecting = false;
+      onSelectionChange();
+    }
+  });
+  
   document.addEventListener("selectstart", onSelectStart);
-  document.addEventListener("selectionchange", onSelectionChange);
+  // 移除 selectionchange 事件监听器，改为在 mouseup 时处理
+  // document.addEventListener("selectionchange", onSelectionChange);
 })();
-
-const highlights = new Highlight();
-CSS.highlights.set(highlightName(), highlights);
 
 function onSelectStart() {
   isNewSelection = true;
@@ -62,9 +112,21 @@ function onSelectionChange() {
   drawScrollMarkers(runNumber);
 }
 
-function highlight(runNumber: number) {
-  highlights.clear();
+function getNextAvailableColor(): string {
+  // 如果所有颜色都已使用，直接使用下一个索引的颜色
+  if (usedColors.size >= colorPalette.length) {
+    colorIndex = (colorIndex + 1) % colorPalette.length;
+    return colorPalette[colorIndex];
+  }
+  
+  // 找到第一个未使用的颜色
+  const availableColor = colorPalette.find(color => !usedColors.has(color)) || colorPalette[0];
+  usedColors.add(availableColor);
+  colorIndex = colorPalette.indexOf(availableColor);
+  return availableColor;
+}
 
+function highlight(runNumber: number) {
   const selection = document.getSelection();
   if (!isSelectionWithAnchorAndFocusNodes(selection)) return;
 
@@ -76,6 +138,38 @@ function highlight(runNumber: number) {
   const trailingSpaces = trimmedSelection[3];
   if (!isSelectionValid(selectionString, selection)) return;
 
+  // 检查文本是否已经被高亮
+  if (highlightInstances.has(selectionString)) {
+    // 如果已高亮，则移除高亮
+    const highlightData = highlightInstances.get(selectionString);
+    if (highlightData) {
+      const oldColor = highlightsMap.get(selectionString);
+      if (oldColor) {
+        usedColors.delete(oldColor); // 释放这个颜色，使其可以被重新使用
+      }
+      const index = highlightData.index;
+      CSS.highlights.delete(`${highlightName()}_${index}`);
+      highlightInstances.delete(selectionString);
+      highlightsMap.delete(selectionString);
+      updateStyles();
+    }
+    return;
+  }
+
+  // 为新文本创建高亮
+  const newHighlight = new Highlight();
+  highlightCounter++; // 增加计数器
+  highlightInstances.set(selectionString, { 
+    highlight: newHighlight, 
+    index: highlightCounter 
+  });
+  CSS.highlights.set(`${highlightName()}_${highlightCounter}`, newHighlight);
+
+  // 为新文本分配颜色
+  const highlightColor = getNextAvailableColor();
+  highlightsMap.set(selectionString, highlightColor);
+  updateStyles();
+
   const regex = occurrenceRegex(
     selectionString.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&")
   );
@@ -85,6 +179,7 @@ function highlight(runNumber: number) {
     NodeFilter.SHOW_TEXT,
     null
   );
+
   let match;
   while (treeWalker.nextNode() && runNumber === latestRunNumber) {
     if (!(treeWalker.currentNode instanceof Text)) continue;
@@ -103,112 +198,13 @@ function highlight(runNumber: number) {
     const matchIndex = match.index;
     const selectedText = match[0];
 
-    let highlightColor = highlightsMap.get(selectedText);
-
-    if (!highlightColor) {
-      highlightColor = colorPalette[colorIndex % colorPalette.length];
-      highlightsMap.set(selectedText, highlightColor);
-      colorIndex++; // 为下一个文本选择分配新的颜色
-    }
-
-    if (
-      !isUsersSelection(
-        selection,
-        textNode,
-        matchIndex,
-        leadingSpaces,
-        selectionString,
-        trailingSpaces
-      )
-    ) {
-      const range = new Range();
-      range.selectNode(textNode);
-      range.setStart(textNode, matchIndex);
-      range.setEnd(textNode, matchIndex + selectedText.length);
-      highlights.add(range, highlightColor); // 使用不同的颜色
-    }
-  }
-}
-
-function isUsersSelection(
-  selection: SelectionWithAnchorAndFocusNodes,
-  textNode: Text,
-  matchIndex: number,
-  leadingSpaces: string,
-  selectionString: string,
-  trailingSpaces: string
-) {
-  const anchorToFocusDirection = selection.anchorNode.compareDocumentPosition(
-    selection.focusNode
-  );
-
-  function isSelectionAcrossNodesLeftToRight() {
-    return anchorToFocusDirection & Node.DOCUMENT_POSITION_FOLLOWING;
-  }
-
-  function isSelectionAcrossNodesRightToLeft() {
-    return anchorToFocusDirection & Node.DOCUMENT_POSITION_PRECEDING;
-  }
-
-  if (isSelectionAcrossNodesLeftToRight()) {
-    if (textNode === selection.anchorNode) {
-      return (
-        (selection.anchorNode.nodeType === Node.ELEMENT_NODE &&
-          selection.anchorOffset === 0) ||
-        selection.anchorOffset <= matchIndex - leadingSpaces.length
-      );
-    } else if (textNode === selection.focusNode) {
-      return (
-        (selection.focusNode.nodeType === Node.ELEMENT_NODE &&
-          selection.focusOffset === 0) ||
-        selection.focusOffset >=
-          matchIndex + selectionString.length + trailingSpaces.length
-      );
-    } else {
-      return (
-        selection.anchorNode.compareDocumentPosition(textNode) &
-          Node.DOCUMENT_POSITION_FOLLOWING &&
-        selection.focusNode.compareDocumentPosition(textNode) &
-          Node.DOCUMENT_POSITION_PRECEDING
-      );
-    }
-  } else if (isSelectionAcrossNodesRightToLeft()) {
-    if (textNode === selection.anchorNode) {
-      return (
-        (selection.anchorNode.nodeType === Node.ELEMENT_NODE &&
-          selection.anchorOffset === 0) ||
-        selection.anchorOffset >=
-          matchIndex + selectionString.length + trailingSpaces.length
-      );
-    } else if (textNode === selection.focusNode) {
-      return (
-        (selection.focusNode.nodeType === Node.ELEMENT_NODE &&
-          selection.focusOffset === 0) ||
-        selection.focusOffset <= matchIndex - leadingSpaces.length
-      );
-    } else {
-      return (
-        selection.anchorNode.compareDocumentPosition(textNode) &
-          Node.DOCUMENT_POSITION_PRECEDING &&
-        selection.focusNode.compareDocumentPosition(textNode) &
-          Node.DOCUMENT_POSITION_FOLLOWING
-      );
-    }
-  } else {
-    if (selection.anchorOffset < selection.focusOffset) {
-      return (
-        textNode === selection.anchorNode &&
-        selection.anchorOffset <= matchIndex - leadingSpaces.length &&
-        selection.focusOffset >=
-          matchIndex + selectionString.length + trailingSpaces.length
-      );
-    } else if (selection.anchorOffset > selection.focusOffset) {
-      return (
-        textNode === selection.focusNode &&
-        selection.focusOffset <= matchIndex - leadingSpaces.length &&
-        selection.anchorOffset >=
-          matchIndex + selectionString.length + trailingSpaces.length
-      );
+    const range = new Range();
+    range.selectNode(textNode);
+    range.setStart(textNode, matchIndex);
+    range.setEnd(textNode, matchIndex + selectedText.length);
+    const currentHighlight = highlightInstances.get(selectionString);
+    if (currentHighlight) {
+      currentHighlight.highlight.add(range);
     }
   }
 }
@@ -220,18 +216,19 @@ function drawScrollMarkers(runNumber: number) {
     scrollMarkersCanvasContext.clearRect(0, 0, width, height);
   });
 
-  for (let range of highlights.values()) {
+  for (let [_, highlightData] of highlightInstances) {
     requestAnimationFrame(() => {
       if (runNumber !== latestRunNumber) return;
       const dpr = devicePixelRatio || 1;
-      const clientRect = range.getBoundingClientRect();
-      if (!clientRect.width || !clientRect.height) return;
+      const clientRect = Array.from(highlightData.highlight.ranges())[0] as Range;
+      const boundingRect = clientRect.getBoundingClientRect();
+      if (!boundingRect.width || !boundingRect.height) return;
 
       const top =
         (window.innerHeight *
           (document.documentElement.scrollTop +
-            clientRect.top +
-            0.5 * (clientRect.top - clientRect.bottom))) /
+            boundingRect.top +
+            0.5 * (boundingRect.top - boundingRect.bottom))) /
         document.documentElement.scrollHeight;
 
       scrollMarkersCanvasContext.beginPath();
