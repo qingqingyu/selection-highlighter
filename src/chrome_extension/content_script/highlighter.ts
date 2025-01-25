@@ -109,7 +109,7 @@ function onSelectionChange() {
   highlight(runNumber);
 
   if (!areScrollMarkersEnabled()) return;
-  drawScrollMarkers(runNumber);
+  // drawScrollMarkers(runNumber);
 }
 
 function getNextAvailableColor(): string {
@@ -209,44 +209,3 @@ function highlight(runNumber: number) {
   }
 }
 
-function drawScrollMarkers(runNumber: number) {
-  requestAnimationFrame(() => {
-    if (runNumber !== latestRunNumber) return;
-    const { width, height } = scrollMarkersCanvasContext.canvas;
-    scrollMarkersCanvasContext.clearRect(0, 0, width, height);
-  });
-
-  for (let [_, highlightData] of highlightInstances) {
-    requestAnimationFrame(() => {
-      if (runNumber !== latestRunNumber) return;
-      const dpr = devicePixelRatio || 1;
-      const clientRect = Array.from(highlightData.highlight.ranges())[0] as Range;
-      const boundingRect = clientRect.getBoundingClientRect();
-      if (!boundingRect.width || !boundingRect.height) return;
-
-      const top =
-        (window.innerHeight *
-          (document.documentElement.scrollTop +
-            boundingRect.top +
-            0.5 * (boundingRect.top - boundingRect.bottom))) /
-        document.documentElement.scrollHeight;
-
-      scrollMarkersCanvasContext.beginPath();
-      scrollMarkersCanvasContext.lineWidth = 1 * dpr;
-      scrollMarkersCanvasContext.strokeStyle = "grey";
-      scrollMarkersCanvasContext.fillStyle = "yellow";
-      scrollMarkersCanvasContext.strokeRect(
-        0.5 * dpr,
-        (top + 0.5) * dpr,
-        15 * dpr,
-        3 * dpr
-      );
-      scrollMarkersCanvasContext.fillRect(
-        1 * dpr,
-        (top + 1) * dpr,
-        14 * dpr,
-        2 * dpr
-      );
-    });
-  }
-}
