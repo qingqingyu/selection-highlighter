@@ -20,7 +20,7 @@ const config: Configuration[] = [
   manifest({
     entry: `./src/chrome_extension/manifest.json`,
     outputDirectory: `dist/chrome_extension`,
-    description: `Highlight occurrences of selected text, with or without a keypress.`,
+    description: `Highlight occurrences of selected text in a variety of colors, with or without a keypress. Our extension supports up to six distinct color options for enhanced readability and customization.`,
   }),
   content_script({
     entry: `./src/chrome_extension/${CONTENT_SCRIPT_PATH}/highlighter.ts`,

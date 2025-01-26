@@ -1,5 +1,5 @@
 {
-  "name": "selection_highlighter",
+  "name": "SelectionColorHighlight",
   "version": "3.1.0",
   "description": "browser highlighter for code analysis",
   "scripts": {
